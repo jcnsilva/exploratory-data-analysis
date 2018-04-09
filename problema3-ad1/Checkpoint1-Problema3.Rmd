@@ -1,0 +1,104 @@
+---
+title: "Problema 3 - Checkpoint 1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = "center",  message = FALSE, warning = FALSE)
+```
+
+```{r}
+library("ggplot2")
+library("dplyr")
+library("tidyr")
+library("ggfortify")
+library("cluster")
+theme_set(theme_bw())
+
+dados = read.csv("dados/emendas_detalhes_parlamentar.csv", encoding="UTF-8")
+```
+
+#Para onde vai o dinheiro das emendas parlamentares?
+Com o intuito de avaliar os tipos de despesas que recebem mais atenção dos parlamentares brasileiros, foram analisados dados referentes às emendas parlamentares realizadas entre os anos de 2015 e 2016.
+
+Uma emenda parlamentar é o meio pelo qual um determinado parlamentar pleiteia a obtenção de uma parcela do orçamento anual do país para aplicar em sua área de atuação. Uma emenda parlamentar destinada a uma ação é custeada com recursos de um determinado ministério.
+Para observar quais áreas recebem mais investimento parlamentar, foram utilizadas as informações sobre o ministério que está custeando a emenda. Durante nossa análise, foi possível observar que os cinco ministérios que mais concentram investimentos dos parlamentares são os ministérios das Cidades, da Saúde, do Turismo, do Esporte e da Agricultura, conforme pode ser observado no gráfico abaixo:
+
+```{r}
+dados_ver = dados %>% group_by(DESC_ORGAO_SUP) %>%
+  summarise(total = sum(VL_REPASSE_PROP))
+
+ggplot(data=dados_ver, aes(x=reorder(DESC_ORGAO_SUP, total), y=total)) + 
+  geom_bar(stat="identity") + 
+  labs(x="Ministério", y="Total (R$)", title="Investimentos por ministério") +
+  coord_flip()
+```
+
+Após tal observação, uma nova pergunta surgiu: Será que os recursos estão distribuídos de forma igualitária entre os estados brasileiros ou há disparidades?
+Para tentar resolver essa questão, tentamos agrupar os estados brasileiros de acordo com os investimentos feitos pelos parlamentares nas cinco principais áreas já citadas anteriormente por meio das emendas parlamentares.
+
+```{r}
+dados2 = dados %>% 
+  filter(ANO_PROP %in% c("2015", "2016")) %>%
+  distinct(ID_PROPOSTA, NOME_PARLAMENTAR, .keep_all = TRUE) %>%
+  select(NOME_PARLAMENTAR, DESC_ORGAO_SUP, VL_REPASSE_PROP, UF_PROPONENTE) %>%
+  filter(DESC_ORGAO_SUP %in% c("MINISTERIO DAS CIDADES", "MINISTERIO DA SAUDE", 
+                               "MINISTÉRIO DA AGRICULTURA,PECUARIA E ABASTECIMENTO", 
+                               "MINISTERIO DO TURISMO",
+                               "MINISTERIO DO ESPORTE"
+                               )) %>%
+  filter(!is.na(UF_PROPONENTE)) %>%
+  group_by(UF_PROPONENTE, DESC_ORGAO_SUP) %>%
+  summarise(GASTOS_POR_AREA = sum(VL_REPASSE_PROP)) %>%
+  mutate(DESC_ORGAO_SUP = gsub(" ", "_", DESC_ORGAO_SUP)) %>%
+  mutate(DESC_ORGAO_SUP = gsub(",", "_", DESC_ORGAO_SUP)) %>%
+  spread(DESC_ORGAO_SUP, GASTOS_POR_AREA, fill = 0) %>%
+  ungroup()
+
+
+dados_escalados = dados2  %>% 
+  select(-UF_PROPONENTE) %>%
+  mutate_each(funs(scale))
+
+row.names(dados_escalados) = dados2$UF_PROPONENTE
+```
+
+Devido ao número reduzido de estados, foi o utilizado o método de agrupamento hierárquico, que apresenta melhores resultados que o algoritmo de k-means nessa situação. 
+Para medir a distância entre dois clusters, foi utilizada a distância de Ward. Esse tipo de medição inter-clusters faz com que seja necessária a utilização da distância euclidiana como métrica de distância intra-cluster.
+A partir da escolha do algoritmo, iniciou-se a busca pela melhor quantidade de grupos.
+
+
+```{r}
+dists = dist(dados_escalados, method = "euclidean")
+hc = hclust(dists, method = "ward.D")
+
+plot(silhouette(cutree(hc, k = 2), dists))
+plot(silhouette(cutree(hc, k = 3), dists))
+plot(silhouette(cutree(hc, k = 4), dists))
+```
+
+Nesta etapa, foram testados agrupamentos com dois, três e quatro grupos e a partir dos gráficos de silhueta, foi possível perceber que o melhor resultado é
+obtido ao dividir os estados brasileiros em dois grupos.
+
+```{r}
+plot(hc, cex = .6)
+plot(hc, hang = -1)
+rect.hclust(hc, k=2)
+```
+
+Feito isso, foi possível observar em maiores detalhes como estão distribuídos os investimentos entre os dois grupos obtidos.
+
+```{r}
+dados2$cluster = factor(cutree(hc, k=2))
+
+dados_escalados$UF_PROPONENTE = dados2$UF_PROPONENTE
+dados_escalados$cluster = factor(cutree(hc, k=2))
+
+ggplot(data=dados_escalados %>% gather(MINISTERIO, TOTAL, 1:5), aes(x=MINISTERIO, y=TOTAL)) +
+  geom_boxplot(aes(fill=MINISTERIO)) +
+  labs(y="TOTAL (Desvios Padrão)", x="", title="Distribuição dos gastos por cluster") +
+  facet_wrap(~cluster)
+```
+
+A partir dos gráficos acima podemos observar que a divisão entre os grupos se dá pelo total de investimento em todas as cinco principais áreas. O grupo 1 geralmente obtém investimentos menores que a média, enquanto que os estados do grupo 2 - a saber São Paulo, Minas Gerais, Rio Grande do Sul e Paraná - recebem investimentos bem acima da média. 
+Todos os estados que recebem investimentos acima da média pertencem ao Centro-Sul do país. Qual poderia ser o motivo de tal acontecimento?  

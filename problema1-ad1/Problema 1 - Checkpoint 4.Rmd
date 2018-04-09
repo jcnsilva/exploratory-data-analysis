@@ -1,0 +1,120 @@
+---
+title: "Problema 1 - Checkpoint 4"
+author: "???"
+date: "15 de julho de 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+#Investigando os gastos dos deputados brasileiros#
+##Introdução##
+Esta análise foi realizada com o objetivo de verificar como os deputados brasileiros utilizam a verba destinada ao custeio de suas atividades parlamentares, chamada cota parlamentar. A cota parlamentar foi instituída em 2009 em substituição à verba indenizatória e pode ser utilizada para o pagamento de, entre outras coisas, despesas com meios de locomoção, serviços de comunicação, manutenção de escritórios de apoio, assinatura de publicações, alimentação e hospedagem. Uma descrição mais completa pode ser encontrada no site da câmara dos deputados
+Os dados utilizados foram obtidos através do Portal da Transparência da câmara dos deputados e dizem respeito ao período entre janeiro e julho de 2016.  
+
+##Novas Análises##
+Agora estamos interessados em utilizar os dados fornecidos para tentar obter respostas para as seguintes questões:
+
+* Quais deputados gastam mais e menos em cursos e palestras?  
+* Os deputados que fretam mais aeronaves gastam menos em passagens aéreas?  
+
+###Quais deputados gastam mais em cursos e palestras? E menos?###
+A partir da análise preliminar, pudemos verificar que a categoria em que nossos deputados menos gastam a cota parlamentar é a categoria de atividades de qualificação, como participação em cursos e palestras. Um resultado tão extremo merece ser verificado de perto.
+Abaixo podemos observar quais são os deputados que mais participaram de cursos e palestras até o início de julho de 2016.
+
+```{r}
+source("gastos_lib.R")
+
+library("dplyr")
+library("ggplot2")
+
+dados = ler_gastos()
+
+dados = dados %>%
+  select(nuDeputadoId,
+        txNomeParlamentar,
+        sgPartido,
+        sgUF,
+        txtDescricao,
+        txtNumero,
+        txtDescricaoEspecificacao,
+        indTipoDocumento,
+        vlrLiquido,
+        numMes)
+
+dados$txtDescricao = as.factor(dados$txtDescricao)
+dados$txtDescricaoEspecificacao = as.factor(dados$txtDescricaoEspecificacao)
+
+dados_palestras = dados %>%
+  filter(txtDescricao == "PARTICIPAÇÃO EM CURSO, PALESTRA OU EVENTO SIMILAR") 
+```
+
+```{r}
+ggplot(data=dados_palestras, mapping=aes(x=txNomeParlamentar, fill=sgPartido)) +
+  geom_bar() +
+  coord_flip() +
+  theme_bw() + 
+  labs(title="Participação dos deputados em aprimoramentos", x="Parlamentar", y="Participações")
+```
+
+Além disso, desses parlamentares que participaram de eventos de aprimoramento, podemos ver agora quais foram os que mais gastaram e os que menos gastaram.
+```{r}
+gastos_palestras = dados_palestras %>%
+  group_by(txNomeParlamentar) %>%
+  summarise(total = sum(vlrLiquido)) %>%
+  left_join(dados_palestras, by="txNomeParlamentar") %>%
+  select(txNomeParlamentar, total, sgPartido) %>%
+  distinct()
+
+ggplot(data=gastos_palestras, mapping=aes(x=txNomeParlamentar, y=total, fill=sgPartido)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  theme_bw() + 
+  labs(title="Gastos dos deputados com aprimoramentos", x="Parlamentar", y="Gastos com aprimoramentos")
+
+deputados = dados %>%
+  group_by(txNomeParlamentar) %>%
+  summarise(total = n()) %>%
+  distinct()
+
+total_deputados = nrow(deputados)
+
+total_deputados_s_qualificacao = nrow(deputados %>%
+  anti_join(gastos_palestras, by="txNomeParlamentar"))
+```
+
+Agora, é possível observar que os deputados que mais gastaram com aprimoramentos foram a deputada Leandre do PV e as deputadas Soraya Santos e Dulce Miranda, ambas do PMDB. `r total_deputados_s_qualificacao` deputados não gastaram com aprimoramentos no período, o que corresponde a `r round(total_deputados_s_qualificacao * 100 / total_deputados, 2)`% dos parlamentares. Um número bastante considerável, mas infelizmente pouco surpreendente.
+
+
+###Os deputados que fretam mais aeronaves gastam menos em passagens aéreas?###
+Após obter informações sobre os gastos dos parlamentares com eventos de aprimoramento, vamos responder a nossa segunda pergunta. Nessa etapa queremos verificar se há alguma relação entre o total de fretamento de aeronaves e o total gasto em passagens aéreas.
+
+```{r}
+fretagens_por_deputado = dados %>%
+  filter(txtDescricao == "LOCAÇÃO OU FRETAMENTO DE AERONAVES") %>%
+  group_by(txNomeParlamentar) %>%
+  summarise(total_fretagens = n()) %>%
+  distinct()
+
+gastosp_por_deputado = dados %>%
+  filter(txtDescricao %in% c("Emissão Bilhete Aéreo", "PASSAGENS AÉREAS")) %>%
+  filter(!(txNomeParlamentar %in% c("LIDERANÇA DO PSDB", "LIDERANÇA DO PT"))) %>%
+  group_by(txNomeParlamentar) %>%
+  summarise(total_gasto = sum(vlrLiquido))
+
+gastos_fretagens = fretagens_por_deputado %>%
+  full_join(gastosp_por_deputado) %>%
+  mutate(total_fretagens = ifelse(is.na(total_fretagens), 0, total_fretagens))
+
+ggplot(data=gastos_fretagens, mapping=aes(x=total_fretagens, y=total_gasto)) +
+  geom_point(position = "jitter") +
+  theme_bw() + 
+  labs(title="Fretagens x Gastos com passagens aéreas", x="Fretagens", y="Gastos com passagens aéreas")
+```
+
+Utilizando apenas o gráfico, é difícil afirmar se de fato existe correlação entre as duas variáveis, mas aparentemente, há uma fraca relação negativa entre elas.  
+Excetuando-se os deputados que não gastaram com fretagens, cujos gastos concentram-se em valores próximos de R$25.000, parece que quando os gastos com fretagens aumentam, os gastos com passagens aéreas diminuem. Porém, é necessário investigar mais a fundo essa possível correlação utilizando testes mais avançados.  

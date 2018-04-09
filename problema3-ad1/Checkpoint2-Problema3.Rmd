@@ -1,0 +1,135 @@
+---
+title: "Checkpoint2-Problema3"
+date: "19 de agosto de 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = "center",  message = FALSE, warning = FALSE)
+```
+
+```{r}
+library("ggplot2")
+library("dplyr")
+library("tidyr")
+library("ggfortify")
+library("cluster")
+library("Rtsne")
+theme_set(theme_bw())
+
+dados_raw = read.csv("dados/emendas_detalhes_parlamentar.csv", encoding="UTF-8")
+```
+
+#Analisando padrões em emendas parlamentares
+##Método de redução de dimensionalidade
+
+Prosseguindo o que foi feito em análises anteriores, o objetivo desta análise é encontrar e evidênciar padrões no valor liberado pelos deputados brasileiros por meio de emendas parlamentares. Agora, ao contário da análise anterior que utilizou hierarquical clustering e knn, os métodos utilizados podem ser PCA e T-SNE.
+Foram analisados dados de emendas parlamentares referentes aos anos 2015 e 2016, que equivalem aos dois primeiros anos da 55ª legislatura da Câmara Federal. Tais dados limitaram-se somente àqueles destinados aos Ministérios da Integração Nacional, Agricultura, Desenv. Social, Cultura e Esporte.
+
+```{r}
+dados = dados_raw %>% 
+  filter(ANO_PROP %in% c("2015", "2016")) %>%
+  distinct(ID_PROPOSTA, NOME_PARLAMENTAR, .keep_all = TRUE) %>%
+  select(NOME_PARLAMENTAR, DESC_ORGAO_SUP, VL_REPASSE_PROP, UF_PROPONENTE) %>%
+  filter(DESC_ORGAO_SUP %in% c("MINISTERIO DA INTEGRACAO NACIONAL",
+                               "MINISTÉRIO DA AGRICULTURA,PECUARIA E ABASTECIMENTO",
+                               "MINISTERIO DO DESENV. SOCIAL E COMBATE A FOME",
+                               "MINISTERIO DA CULTURA",
+                               "MINISTERIO DO ESPORTE"
+                               )) %>%
+  filter(!is.na(NOME_PARLAMENTAR)) %>%
+  mutate(DESC_ORGAO_SUP = gsub(" ", "_", DESC_ORGAO_SUP)) %>%
+  mutate(DESC_ORGAO_SUP = gsub(",", "_", DESC_ORGAO_SUP)) %>%
+  mutate(DESC_ORGAO_SUP = gsub("DESENV.", "DESENV", DESC_ORGAO_SUP)) %>%
+  mutate(DESC_ORGAO_SUP = gsub("É", "E", DESC_ORGAO_SUP)) %>%
+  group_by(NOME_PARLAMENTAR, DESC_ORGAO_SUP) %>%
+  summarise(GASTOS_AREA = sum(VL_REPASSE_PROP)) %>%
+  spread(DESC_ORGAO_SUP, GASTOS_AREA, fill = 0) %>%
+  ungroup()
+
+partidos_parlamentares = read.csv("dados/deputados_partidos.csv", encoding="UTF-8") %>%
+  select(-X) 
+
+dados_partido = partidos_parlamentares %>%
+  left_join(dados, by = c("NOME" = "NOME_PARLAMENTAR")) %>%
+  filter(!is.na(MINISTERIO_DA_AGRICULTURA_PECUARIA_E_ABASTECIMENTO))
+
+```
+
+Dessa vez, o alvo do agrupamento são os partidos políticos. Haveria algum padrão entre os valores liberads por cada partido?
+
+Para começar, foi testado o método de redução de dimensionalidade PCA (PRINCIPAL COMPONENT ANALYSIS). Seus resultados não foram muito animadores, visto que não foi possível observar claramente os grupos de partidos.
+
+```{r}
+dados_proporcionais_partido = dados_partido %>%
+  group_by(PARTIDO) %>%
+  summarize(
+    AGRICULTURA = sum(MINISTERIO_DA_AGRICULTURA_PECUARIA_E_ABASTECIMENTO),
+    DESENV_SOCIAL = sum(MINISTERIO_DO_DESENV_SOCIAL_E_COMBATE_A_FOME),
+    INTEGRACAO_NACIONAL = sum(MINISTERIO_DA_INTEGRACAO_NACIONAL),
+    CULTURA = sum(MINISTERIO_DA_CULTURA),
+    ESPORTE = sum(MINISTERIO_DO_ESPORTE),
+    TOTAL = n()
+    ) %>%
+  ungroup() %>%
+  mutate( AGRICULTURA = AGRICULTURA / TOTAL,
+          DESENV_SOCIAL = DESENV_SOCIAL / TOTAL,
+          INTEGRACAO_NACIONAL = INTEGRACAO_NACIONAL / TOTAL,
+          CULTURA = CULTURA / TOTAL,
+          ESPORTE = ESPORTE / TOTAL
+          ) %>%
+  select(-TOTAL)
+
+
+
+row.names(dados_proporcionais_partido) = dados_proporcionais_partido$PARTIDO
+
+pr.out = prcomp(select(dados_proporcionais_partido, -PARTIDO), scale = TRUE) 
+
+#biplot(pr.out, scale = 0)
+
+autoplot(pr.out, label = TRUE, label.size = 3, shape = FALSE)
+```
+
+A segunda alternativa foi utilizar o método de redução TSNE (T-Distributed Stochastic Neighbor Embedding). Aqui, os resultados foram mais animadores. Ajustando o nível de embaraço (perplexity), foi possível observar que os melhores resultados são obtidos ajustando tal nível ao valor 3.
+Feito isso, foi possível observar os grupos de Partidos, que podem ser vistos no gráfico abaixo.
+
+```{r}
+
+tsne.out = Rtsne(select(dados_proporcionais_partido, -PARTIDO), perplexity = 3)
+
+tsne_group = read.csv("dados/tsne_grouping.csv", encoding = "UTF-8")
+
+df = as.data.frame(tsne.out$Y)
+df$PARTIDO = as.factor(dados_proporcionais_partido$PARTIDO)
+df = df %>% left_join(tsne_group, by = "PARTIDO")
+df$GRUPO = as.factor(df$GRUPO)
+
+
+ggplot(df, aes(x = V1, y = V2)) + 
+  geom_text(aes(label = PARTIDO, color = GRUPO))
+
+```
+
+Uma visão mais aprofundada de tais grupos possibilita ver as principais diferenças entre eles.
+
+```{r}
+dados_proporcionais_partido = dados_proporcionais_partido %>%
+  left_join(tsne_group, by = "PARTIDO")
+dados_proporcionais_partido$GRUPO = as.factor(dados_proporcionais_partido$GRUPO)
+dados_proporcionais_partido$PARTIDO = as.factor(dados_proporcionais_partido$PARTIDO)
+
+dados_proporcionais_partido = dados_proporcionais_partido %>%
+  gather(MINISTERIO, TOTAL, 2:6)
+
+ggplot(dados_proporcionais_partido, aes(x = MINISTERIO, y  = TOTAL)) +
+  geom_boxplot(aes(fill = MINISTERIO)) +
+  facet_grid(~GRUPO) + 
+  theme(axis.text.x = element_text(size = 0))
+```
+
+Ao análisar os boxplot podemos ver que no grupo 2, por exemplo, os parlamentares destinam grande parte da verba para o esporte. Os parlamentares desse grupo são, ainda, os que mais investem em cultura.
+Nos grupos 1 e 4, o esporte também é o principal destino das verbas, mas aqui os deputados também destinam bastante verba para a agricultura. A principal diferença entre os dois grupos é o total repassado. 
+A agricultura é a principal destinação da verba das emendas aprovadas pelos deputados do grupo 5. Foi uma surpresa ver o Partido Verde incluso nesse grupo, já que uma das bandeiras do partido é o ambientalismo.
+Por fim, temos o grupo 3. Os deputados deste grupo destinam a maior parte das verbas para o esporte e a integração nacional.
+
